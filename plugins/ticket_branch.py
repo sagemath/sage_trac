@@ -144,7 +144,10 @@ class TicketBranch(Component):
             return
 
         ticket_ref = "refs/heads/t/%s"%ticket.id
-        old_branch = old_values['branch'].strip()
+        old_branch = old_values['branch']
+        if old_branch is None:
+            old_branch = ""
+        old_branch = old_branch.strip()
         new_branch = ticket['branch'].strip()
 
         if new_branch and self._is_existing_branch(new_branch):
