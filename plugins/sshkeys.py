@@ -130,7 +130,7 @@ class SshKeysPlugin(Component):
 
     def setkeys(self, req, keys):
         keys = set(keys)
-        if len(keys) > 0xff:
+        if len(keys) > 0x100:
             add_warning(req, 'We only support using your first 256 ssh keys.')
         return self._setkeys(req.authname, keys)
 
