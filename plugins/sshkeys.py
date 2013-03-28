@@ -12,15 +12,17 @@ _gitolite_keydir = os.path.join(_home, 'gitolite', 'keydir')
 _gitolite_update = os.path.join(_home, 'bin', 'gitolite-update')
 
 class UserDataStore(Component):
-    def cursor(self):
-        return self.env.db_query.cursor()
+    def cursor(self, read_only=True):
+        if read_only:
+            return self.env.db_query.cursor()
+        return self.env.db_transaction.cursor()
 
     def save_data(self, user, dictionary):
         """
         Saves user data for user.
         """
         self._create_table()
-        cursor = self.cursor()
+        cursor = self.cursor(read_only=False)
         for key, value in dictionary.iteritems():
             try:
                 cursor.execute('INSERT INTO "user_data_store" VALUES (%s, %s, %s)', (user, key, value))
@@ -52,9 +54,9 @@ class UserDataStore(Component):
         return return_value
 
     def _create_table(self):
-        cursor = self.cursor()
-        cur.execute('SELECT * FROM "information_schema.tables" WHERE "table_name"=%s', ('user_data_store',))
-        if not cur.rowcount:
+        cursor = self.cursor(read_only=False)
+        cursor.execute('SELECT * FROM "information_schema.tables" WHERE "table_name"=%s', ('user_data_store',))
+        if not cursor.rowcount:
             cursor.execute('CREATE TABLE "user_data_store" ( "user" text, key text, value text, UNIQUE ( "user", key ) )')
 
 class SshKeysPlugin(Component):
