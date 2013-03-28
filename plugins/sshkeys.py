@@ -68,7 +68,7 @@ class SshKeysPlugin(Component):
 
     def render_preference_panel(self, req, panel):
         if req.method == 'POST':
-            new_ssh_keys = set(key.strip() for key in req.args.get('ssh_keys').split('\n'))
+            new_ssh_keys = set(key.strip() for key in req.args.get('ssh_keys').splitlines())
             if new_ssh_keys:
                 self.setkeys(req, new_ssh_keys)
                 add_notice(req, 'Your ssh key has been saved.')
@@ -92,7 +92,7 @@ class SshKeysPlugin(Component):
               printout(user)
 
     def _do_dump_key(self, user):
-        printout(self._getkey(user))
+        printout(self._getkeys(user))
 
     # Gitolite exporting
     def _export_to_gitolite(self, user, keys):
@@ -114,12 +114,13 @@ class SshKeysPlugin(Component):
                 yield user
 
     def _getkeys(self, user):
-        return self._user_data_store.get_data(user)['ssh_keys'].split('\n')
+        ret = self._user_data_store.get_data(user)
+        if not ret: return []
+        return ret['ssh_keys'].splitlines()
 
     def _setkeys(self, user, keys):
         self._export_to_gitolite(user, keys)
         self._user_data_store.save_data(user, {'ssh_keys': '\n'.join(keys)})
-
 
     # RPC boilerplate
     def listusers(self, req):
