@@ -7,8 +7,9 @@ from trac.util.text import printout
 from tracrpc.api import IXMLRPCHandler
 import subprocess, os
 
-_gitolite_keydir = '/home'+os.path.join('www-data', 'gitolite', 'keydir')
-_gitolite_update = '/home'+os.path.join('www-data','bin','gitolite-update')
+_home = '/home/www-data'
+_gitolite_keydir = os.path.join(_home, 'gitolite', 'keydir')
+_gitolite_update = os.path.join(_home, 'bin', 'gitolite-update')
 
 class UserDataStore(Component):
     def save_data(self, user, dictionary):
