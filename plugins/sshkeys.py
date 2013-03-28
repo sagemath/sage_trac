@@ -68,7 +68,7 @@ class SshKeysPlugin(Component):
 
     def render_preference_panel(self, req, panel):
         if req.method == 'POST':
-            new_ssh_keys = set(key.strip() for key in req.args.get('ssh_key').split('\n'))
+            new_ssh_keys = set(key.strip() for key in req.args.get('ssh_keys').split('\n'))
             if new_ssh_keys:
                 self.setkeys(req, new_ssh_keys)
                 add_notice(req, 'Your ssh key has been saved.')
