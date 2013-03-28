@@ -103,6 +103,11 @@ class SshKeysPlugin(Component):
             f = open(os.path.join(_gitolite_keydir, d, user+'.pub'), 'w')
             f.write(key)
             f.close()
+        for i in range(len(keys), len(self._getkeys(user))):
+            d = hex(i)[2:]
+            while len(d) < 2:
+                d = '0'+d
+            os.unlink(os.path.join(_gitolite_keydir, d, user+'.pub'))
         process = subprocess.Popen(_gitolite_update)
         process.wait()
 
