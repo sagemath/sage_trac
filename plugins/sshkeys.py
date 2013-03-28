@@ -72,7 +72,7 @@ class SshKeysPlugin(Component):
         user = req.authname
         if req.method == 'POST':
             new_ssh_keys = req.args.get('ssh_key').strip()
-            if new_ssh_key:
+            if new_ssh_keys:
                 self._setkeys(user, new_ssh_keys)
                 add_notice(req, 'Your ssh key has been saved.')
             req.redirect(req.href.prefs(panel or None))
