@@ -70,15 +70,14 @@ class SshKeysPlugin(Component):
         yield ('sshkeys', _('SSH keys'))
 
     def render_preference_panel(self, req, panel):
-        user = req.authname
         if req.method == 'POST':
-            new_ssh_keys = req.args.get('ssh_key').strip()
+            new_ssh_keys = set(key.strip() for key in req.args.get('ssh_key').split('\n'))
             if new_ssh_keys:
-                self._setkeys(user, new_ssh_keys)
+                self.setkeys(req, new_ssh_keys)
                 add_notice(req, 'Your ssh key has been saved.')
             req.redirect(req.href.prefs(panel or None))
 
-        return 'prefs_ssh_keys.html', self._user_data_store.get_data(user)
+        return 'prefs_ssh_keys.html', self._user_data_store.get_data(req.authname)
 
     # IAdminCommandProvider methods
     def get_admin_commands(self):
@@ -101,16 +100,12 @@ class SshKeysPlugin(Component):
     # Gitolite exporting
     def _export_to_gitolite(self, user, keys):
         for i,key in enumerate(keys):
-            if i > 0xff:
-                #add_warning(req, 'We only support using your first 256 ssh keys.')
-                break
-            else:
-                d = hex(i)[2:]
-                while len(d) < 2:
-                    d = '0'+d
-                f = open(os.path.join(_gitolite_keydir, d, user+'.pub'), 'w')
-                f.write(key)
-                f.close()
+            d = hex(i)[2:]
+            while len(d) < 2:
+                d = '0'+d
+            f = open(os.path.join(_gitolite_keydir, d, user+'.pub'), 'w')
+            f.write(key)
+            f.close()
         process = subprocess.Popen(_gitolite_update)
         process.wait()
 
@@ -118,15 +113,15 @@ class SshKeysPlugin(Component):
     def _listusers(self):
         all_data = self._user_data_store.get_data_all_users()
         for user, data in all_data.iteritems():
-            if data.has_key('ssh_key'):
+            if data.has_key('ssh_keys'):
                 yield user
 
     def _getkeys(self, user):
-        return self._user_data_store.get_data(user)['ssh_key']
+        return self._user_data_store.get_data(user)['ssh_keys'].split('\n')
 
     def _setkeys(self, user, keys):
-        self._user_data_store.save_data(user, {'ssh_key': keys})
-        self._export_to_gitolite(user, keys.split('\n'))
+        self._export_to_gitolite(user, keys)
+        self._user_data_store.save_data(user, {'ssh_keys': '\n'.join(keys)})
 
 
     # RPC boilerplate
@@ -137,7 +132,18 @@ class SshKeysPlugin(Component):
         return self._getkeys(req.authname)
 
     def setkeys(self, req, keys):
+        keys = set(keys)
+        if len(keys) > 0xff:
+            add_warning(req, 'We only support using your first 256 ssh keys.')
         return self._setkeys(req.authname, keys)
+
+    def addkeys(self, req, keys):
+        new_keys = self.getkeys(req)
+        new_keys.extend(keys)
+        self.setkeys(req, new_keys)
+
+    def addkey(self, req, key):
+        self.addkeys(req, (key,))
 
     # IXMLRPCHandler methods
     def xmlrpc_namespace(self):
@@ -145,6 +151,7 @@ class SshKeysPlugin(Component):
 
     def xmlrpc_methods(self):
         yield (None, ((list,),), self.listusers)
-        yield (None, ((str,),), self.getkeys)
+        yield (None, ((list,),), self.getkeys)
         yield (None, ((None,str),), self.setkeys)
-
+        yield (None, ((None,list),), self.addkeys)
+        yield (None, ((None,str),), self.addkey)
