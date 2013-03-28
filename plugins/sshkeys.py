@@ -12,52 +12,51 @@ _gitolite_keydir = os.path.join(_home, 'gitolite', 'keydir')
 _gitolite_update = os.path.join(_home, 'bin', 'gitolite-update')
 
 class UserDataStore(Component):
-    def cursor(self, read_only=True):
-        if read_only:
-            return self.env.db_query.cursor()
-        return self.env.db_transaction.cursor()
-
     def save_data(self, user, dictionary):
         """
         Saves user data for user.
         """
         self._create_table()
-        cursor = self.cursor(read_only=False)
-        for key, value in dictionary.iteritems():
-            try:
-                cursor.execute('INSERT INTO "user_data_store" VALUES (%s, %s, %s)', (user, key, value))
-            except:
-                cursor.execute('REPLACE INTO "user_data_store" VALUES (%s, %s, %s)', (user, key, value))
+        with self.env.db_transaction as db:
+            cursor = db.cursor()
+            for key, value in dictionary.iteritems():
+                try:
+                    cursor.execute('INSERT INTO "user_data_store" VALUES (%s, %s, %s)', (user, key, value))
+                except:
+                    cursor.execute('REPLACE INTO "user_data_store" VALUES (%s, %s, %s)', (user, key, value))
 
     def get_data(self, user):
         """
         Returns a dictionary with all data keys
         """
         self._create_table()
-        cursor = self.cursor()
-        cursor.execute('SELECT key, value FROM "user_data_store" WHERE "user"=%s', (user,))
-        return {key:value for key, value in cursor}
+        with self.env.db_query as db:
+            cursor = db.cursor()
+            cursor.execute('SELECT key, value FROM "user_data_store" WHERE "user"=%s', (user,))
+            return {key:value for key, value in cursor}
 
     def get_data_all_users(self):
         """
         Returns a dictionary with all data keys
         """
         self._create_table()
-        cursor = self.cursor()
         return_value = {}
-        cursor.execute('SELECT "user", key, value FROM "user_data_store"')
-        for user, key, value in cursor:
-            if return_value.has_key(user):
-                return_value[user][key] = value
-            else:
-                return_value[user] = {key: value}
+        with self.env.db_query as db:
+            cursor = db.cursor()
+            cursor.execute('SELECT "user", key, value FROM "user_data_store"')
+            for user, key, value in cursor:
+                if return_value.has_key(user):
+                    return_value[user][key] = value
+                else:
+                    return_value[user] = {key: value}
         return return_value
 
     def _create_table(self):
-        cursor = self.cursor(read_only=False)
-        cursor.execute('SELECT * FROM "information_schema.tables" WHERE "table_name"=%s', ('user_data_store',))
-        if not cursor.rowcount:
-            cursor.execute('CREATE TABLE "user_data_store" ( "user" text, key text, value text, UNIQUE ( "user", key ) )')
+        with self.env.db_transaction as db:
+            cursor = db.cursor()
+            cursor.execute('SELECT * FROM "information_schema.tables" WHERE "table_name"=%s', ('user_data_store',))
+            if not cursor.rowcount:
+                cursor.execute('CREATE TABLE "user_data_store" ( "user" text, key text, value text, UNIQUE ( "user", key ) )')
 
 class SshKeysPlugin(Component):
     implements(IPreferencePanelProvider, IAdminCommandProvider, IXMLRPCHandler)
