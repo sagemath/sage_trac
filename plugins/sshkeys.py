@@ -135,6 +135,8 @@ class SshKeysPlugin(Component):
         return self._getkeys(req.authname)
 
     def setkeys(self, req, keys):
+        if req.authname == 'anonymous':
+            raise TracError('cannot set ssh keys for anonymous users')
         keys = set(keys)
         if len(keys) > 0x100:
             add_warning(req, 'We only support using your first 256 ssh keys.')
