@@ -21,11 +21,11 @@ class BranchSearchModule(Component):
         return 'search'
 
     def xmlrpc_methods(self):
-        yield ('SEARCH_VIEW', ((list,), (str,)), self.branch)
+        yield ('SEARCH_VIEW', ((list,str),), self.branch)
 
     def branch(self, req, terms):
         return self.get_search_results(req, [terms], ['branch'])
-        
+
     # ISearchSource methods
     def get_search_filters(self, req):
         if 'CHANGESET_VIEW' in req.perm:
@@ -52,4 +52,4 @@ class BranchSearchModule(Component):
             for ticket, summary, time, owner, branch in cursor:
                 yield (int(ticket), summary, from_utimestamp(time), owner, branch)
 
-        
+
