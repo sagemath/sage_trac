@@ -5,7 +5,7 @@ from genshi.filters import Transformer
 
 from trac.core import *
 from trac.web.api import ITemplateStreamFilter
-from trac.ticket.api import ITicketChangeListener
+from trac.ticket.api import ITicketManipulator
 
 import subprocess
 import os.path
@@ -16,7 +16,8 @@ branch_re = re.compile(r"^(?!.*/\.)(?!.*\.\.)(?!/)(?!.*//)(?!.*@\{)(?!.*\\)[^\04
 change_re = re.compile('^\+=======$', re.MULTILINE)
 removed_re = re.compile('removed in (?:local|remote)\n  (?:base|our|their)   \d{6} ([a-f\d]{40}) .+\n  (?:base|our|their)  \d{6} ([a-f\d]{40})')
 
-MASTER_BRANCH = 'u/ohanar/build_system'
+MASTER_BRANCH = u'master'
+MAX_NEW_COMMITS = 10
 
 def _is_clean_merge(merge_tree):
     for match in change_re.finditer(merge_tree):
@@ -41,7 +42,7 @@ class TicketBranch(Component):
     applies changes to the ``branch`` field to the git repository.
     """
     implements(ITemplateStreamFilter)
-    implements(ITicketChangeListener)
+    implements(ITicketManipulator)
 
     def __init__(self, *args, **kwargs):
         Component.__init__(self, *args, **kwargs)
@@ -60,6 +61,8 @@ class TicketBranch(Component):
         branch = data.get('ticket', {'branch':None})['branch']
         if filename != 'ticket.html' or not branch:
             return stream
+
+        branch = branch.strip()
 
         def error_filters(error):
             return FILTER.attr("class", "needs_work"), FILTER.attr("title", error)
@@ -193,43 +196,61 @@ class TicketBranch(Component):
         """
         return subprocess.check_output(["git","--git-dir=%s"%self.git_dir]+list(args))
 
-    def ticket_created(self, ticket): pass
-
-    def ticket_deleted(self, ticket): pass
-
-    def ticket_changed(self, ticket, author, comment, old_values):
-        """
-        If the ``branch`` field of a ticket changes, the ``t/ticket_number``
-        should reflect this change:
-
-        - If ``branch`` is now empty or if ``branch`` is invalid, then the
-          symbolic ref ``t/ticket_number`` is deleted.
-
-        - If ``branch`` changes, then the symbolic ref ``t/ticket_number``
-          points to the new branch.
-
-        """
-        # need to figure out a way to do this using git tools, so currently we disable
-        return
-
-        if 'branch' not in old_values:
-            # branch has not changed
+    def _valid_commit(self, val):
+        if not isinstance(val, basestring):
+            return
+        if len(val) != 40:
+            return
+        try:
+            int(val, 16)
+            return val.lower()
+        except ValueError:
             return
 
-        ticket_ref = "refs/heads/t/%s"%ticket.id
-        old_branch = old_values['branch']
-        if old_branch is None:
-            old_branch = ""
-        old_branch = old_branch.strip()
-        new_branch = ticket['branch'].strip()
+    def log_table(self, new_commit, limit=None, ignore=[]):
+        git_cmd = [u'log', u'--oneline']
+        if limit is not None:
+            git_cmd.append(u'--max-count={0}'.format(limit))
+        git_cmd.append(new_commit)
+        for branch in ignore:
+            git_cmd.append(u'^{0}'.format(branch))
+        log = self.__git(*git_cmd)
+        table = []
+        for line in log.splitlines():
+            short_sha1 = line[:7]
+            title = line[8:]
+            table.append(u'||[changeset:{0}]||{1}||'.format(short_sha1, title))
+        return table
 
-        if new_branch and self._is_existing_branch(new_branch):
+    # doesn't actually do anything, according to the api
+    def prepare_ticket(self, req, ticket, fields, actions): pass
+
+    # hack changes into validate_ticket, since api is currently stilly
+    def validate_ticket(self, req, ticket):
+        branch = ticket['branch']
+        old_commit = self._valid_commit(ticket['commit'])
+        if branch:
+            ticket['branch'] = branch = branch.strip()
             try:
-                subprocess.check_output(["ln","-sf",new_branch,os.path.join(self.git_dir,ticket_ref)])
-            except subprocess.CalledProcessError as e:
-                self.log.error("%s failed with exit code %s. The output was:\n%s"%(e.cmd,e.returncode,e.output))
+                commit = ticket['commit'] = unicode(self._dereference_head(branch))
+            except GitError:
+                commit = ticket['commit'] = u''
         else:
-            try:
-                subprocess.check_output(["rm","-f",os.path.join(self.git_dir,ticket_ref)])
-            except subprocess.CalledProcessError as e:
-                self.log.error("%s failed with exit code %s. The output was:\n%s"%(e.cmd,e.returncode,e.output))
+            commit = ticket['commit'] = u''
+
+        if req.args.get('preview') is None:
+            if commit and commit != old_commit:
+                ignore = {MASTER_BRANCH}
+                if old_commit is not None:
+                    ignore.add(old_commit)
+                table = self.log_table(commit, ignore=ignore)
+                if len(table) > MAX_NEW_COMMITS:
+                    comment = u'Last {0} new commits:\n'.format(MAX_NEW_COMMITS)
+                    table = table[:MAX_NEW_COMMITS]
+                else:
+                    comment = u'New commits:\n'
+                if table:
+                    comment += '\n'.join(table)
+                    ticket.save_changes(author=req.authname, comment=comment)
+
+        return []
