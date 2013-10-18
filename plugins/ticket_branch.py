@@ -208,18 +208,18 @@ class TicketBranch(Component):
             return
 
     def log_table(self, new_commit, limit=None, ignore=[]):
-        git_cmd = [u'log', u'--oneline']
+        git_cmd = ['log', '--oneline']
         if limit is not None:
-            git_cmd.append(u'--max-count={0}'.format(limit))
+            git_cmd.append('--max-count={0}'.format(limit))
         git_cmd.append(new_commit)
         for branch in ignore:
-            git_cmd.append(u'^{0}'.format(branch))
+            git_cmd.append('^{0}'.format(branch))
         log = self.__git(*git_cmd)
         table = []
         for line in log.splitlines():
             short_sha1 = line[:7]
             title = line[8:]
-            table.append(u'||[changeset:{0}]||{1}||'.format(short_sha1, title))
+            table.append('||[changeset:{0}]||{1}||'.format(short_sha1, title))
         return table
 
     # doesn't actually do anything, according to the api
@@ -238,19 +238,25 @@ class TicketBranch(Component):
         else:
             commit = ticket['commit'] = u''
 
-        if req.args.get('preview') is None:
-            if commit and commit != old_commit:
-                ignore = {MASTER_BRANCH}
-                if old_commit is not None:
-                    ignore.add(old_commit)
-                table = self.log_table(commit, ignore=ignore)
-                if len(table) > MAX_NEW_COMMITS:
-                    comment = u'Last {0} new commits:\n'.format(MAX_NEW_COMMITS)
-                    table = table[:MAX_NEW_COMMITS]
-                else:
-                    comment = u'New commits:\n'
-                if table:
-                    comment += '\n'.join(table)
-                    ticket.save_changes(author=req.authname, comment=comment)
+        if (req.args.get('preview') is None and
+                req.args.get('comment') is not None and
+                commit and
+                commit != old_commit):
+            ignore = {MASTER_BRANCH}
+            if old_commit is not None:
+                ignore.add(old_commit)
+            table = self.log_table(commit, ignore=ignore)
+            if len(table) > MAX_NEW_COMMITS:
+                header = 'Last {0} new commits:'.format(MAX_NEW_COMMITS)
+                table = table[:MAX_NEW_COMMITS]
+            else:
+                header = 'New commits:'
+            if table:
+                comment = req.args['comment'].splitlines()
+                if comment:
+                    comment.append('----')
+                comment.append(header)
+                comment.extend(table)
+                req.args['comment'] = unicode('\n'.join(comment))
 
         return []
