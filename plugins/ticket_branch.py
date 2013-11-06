@@ -207,6 +207,9 @@ class TicketBranch(Component):
         except ValueError:
             return
 
+    def get_commit_link(self, sha1):
+        return 'http://git.sagemath.org/sage.git/commit/?id={0}'.format(sha1)
+
     def log_table(self, new_commit, limit=None, ignore=[]):
         git_cmd = ['log', '--oneline']
         if limit is not None:
@@ -219,7 +222,7 @@ class TicketBranch(Component):
         for line in log.splitlines():
             short_sha1 = line[:7]
             title = line[8:]
-            table.append('||[changeset:{0}]||{1}||'.format(short_sha1, title))
+            table.append('||[[{0}|{1}]]||{2}||'.format(self.get_commit_link(short_sha1), short_sha1, title))
         return table
 
     # doesn't actually do anything, according to the api
