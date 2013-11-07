@@ -102,17 +102,16 @@ class TicketBranch(Component):
             return s
 
         try:
-            common_ancestor = self._common_ancestor(master, branch)
+            base = self.__git('merge-base', master, branch).strip()
         except GitError:
             return error("failed to determine common ancestor")
 
-        if common_ancestor == branch:
+        if base == branch:
             return error("no commits on branch yet")
 
         filters = [FILTER.append(tag.a('(Commits)',
-                href=req.href.log(rev=branch,stop_rev=common_ancestor)))]
+                href=req.href.log(rev=branch,stop_rev=base)))]
 
-        base = self.__git('merge-base', master, branch).strip()
         merge_tree = self.__git('merge-tree', base, master, branch)
         if _is_clean_merge(merge_tree):
             self._tree_cache[branch] = merge_tree
