@@ -220,8 +220,8 @@ class TicketBranch(Component):
         table = []
         for line in log.splitlines():
             short_sha1 = line[:7]
-            title = line[8:]
-            table.append('||[[{0}|{1}]]||{2}||'.format(self.get_commit_link(short_sha1), short_sha1, title))
+            title = line[8:].decode('utf8')
+            table.append(u'||[[{0}|{1}]]||{2}||'.format(self.get_commit_link(short_sha1), short_sha1, title))
         return table
 
     # doesn't actually do anything, according to the api
@@ -249,16 +249,16 @@ class TicketBranch(Component):
                 ignore.add(old_commit)
             table = self.log_table(commit, ignore=ignore)
             if len(table) > MAX_NEW_COMMITS:
-                header = 'Last {0} new commits:'.format(MAX_NEW_COMMITS)
+                header = u'Last {0} new commits:'.format(MAX_NEW_COMMITS)
                 table = table[:MAX_NEW_COMMITS]
             else:
-                header = 'New commits:'
+                header = u'New commits:'
             if table:
                 comment = req.args['comment'].splitlines()
                 if comment:
-                    comment.append('----')
+                    comment.append(u'----')
                 comment.append(header)
                 comment.extend(table)
-                req.args['comment'] = unicode('\n'.join(comment))
+                req.args['comment'] = u'\n'.join(comment)
 
         return []
