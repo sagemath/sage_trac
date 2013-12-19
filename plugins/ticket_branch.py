@@ -16,7 +16,7 @@ branch_re = re.compile(r"^(?!.*/\.)(?!.*\.\.)(?!/)(?!.*//)(?!.*@\{)(?!.*\\)[^\04
 change_re = re.compile('^\+=======$', re.MULTILINE)
 removed_re = re.compile('removed in (?:local|remote)\n  (?:base|our|their)   \d{6} ([a-f\d]{40}) .+\n  (?:base|our|their)  \d{6} ([a-f\d]{40})')
 
-MASTER_BRANCH = u'master'
+MASTER_BRANCH = u'develop'
 MAX_NEW_COMMITS = 10
 
 def _is_clean_merge(merge_tree):
@@ -102,7 +102,7 @@ class TicketBranch(Component):
             return s
 
         try:
-            base = self.__git('merge-base', master, branch).strip()
+            base = self._merge_base(master, branch)
         except GitError:
             return error("failed to determine common ancestor")
 
@@ -194,6 +194,13 @@ class TicketBranch(Component):
         Helper to run a git command.
         """
         return subprocess.check_output(["git","--git-dir=%s"%self.git_dir]+list(args))
+
+    def _merge_base(self, tree1, tree2):
+        try:
+            return self.__git('merge-base', tree1, tree2).strip()
+        except subprocess.CalledProcessError as e:
+            self.log.error("%s failed with exit code %s. The output was:\n%s"%(e.cmd,e.returncode,e.output))
+            raise GitError("could not determine merge base of `%s` and `%s`"%(tree1, tree2))
 
     def _valid_commit(self, val):
         if not isinstance(val, basestring):
