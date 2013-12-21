@@ -228,7 +228,7 @@ class TicketBranch(Component):
         for line in log.splitlines():
             short_sha1 = line[:7]
             title = line[8:].decode('utf8')
-            table.append(u'||[[%s|%s]]||{{{%s}}}||'(self.get_commit_link(short_sha1), short_sha1, title))
+            table.append(u'||[[%s|%s]]||{{{%s}}}||'%(self.get_commit_link(short_sha1), short_sha1, title))
         return table
 
     # doesn't actually do anything, according to the api
@@ -254,7 +254,10 @@ class TicketBranch(Component):
             ignore = {MASTER_BRANCH}
             if old_commit is not None:
                 ignore.add(old_commit)
-            table = self.log_table(commit, ignore=ignore)
+            try:
+                table = self.log_table(commit, ignore=ignore)
+            except GitError:
+                return []
             if len(table) > MAX_NEW_COMMITS:
                 header = u'Last {0} new commits:'.format(MAX_NEW_COMMITS)
                 table = table[:MAX_NEW_COMMITS]
