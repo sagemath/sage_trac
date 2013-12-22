@@ -10,6 +10,7 @@ from trac.ticket.api import ITicketManipulator
 import subprocess
 import os.path
 import re
+import urllib
 
 branch_re = re.compile(r"^(?!.*/\.)(?!.*\.\.)(?!/)(?!.*//)(?!.*@\{)(?!.*\\)[^\040\177 ~^:?*[]+(?<!\.lock)(?<!/)(?<!\.)$") # http://stackoverflow.com/questions/12093748/how-do-i-check-for-valid-git-branch-names
 
@@ -18,6 +19,9 @@ removed_re = re.compile('removed in (?:local|remote)\n  (?:base|our|their)   \d{
 
 MASTER_BRANCH = u'develop'
 MAX_NEW_COMMITS = 10
+
+GIT_RANGE_LOG_URL = 'http://git.sagemath.org/sage.git/log/?h={branch}&qt=range&q={base}..{branch}'
+GIT_RANGE_LOG_URL = GIT_RANGE_LOG_URL.format(base=urllib.quote(MASTER_BRANCH, ''), branch='{branch}')
 
 def _is_clean_merge(merge_tree):
     for match in change_re.finditer(merge_tree):
@@ -62,7 +66,7 @@ class TicketBranch(Component):
         if filename != 'ticket.html' or not branch:
             return stream
 
-        branch = branch.strip()
+        branch = branch_name = branch.strip()
 
         def error_filters(error):
             return FILTER.attr("class", "needs_work"), FILTER.attr("title", error)
@@ -110,7 +114,7 @@ class TicketBranch(Component):
             return error("no commits on branch yet")
 
         filters = [FILTER.append(tag.a('(Commits)',
-                href=req.href.log(rev=branch,stop_rev=base)))]
+                href=GIT_RANGE_LOG_URL.format(branch=urllib.quote(branch_name, ''))))]
 
         merge_tree = self.__git('merge-tree', base, master, branch)
         if _is_clean_merge(merge_tree):
