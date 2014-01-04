@@ -226,10 +226,10 @@ class TicketBranch(Component):
         except ValueError:
             return
 
-    def log_table(self, new_commit, limit=None, ignore=[]):
-        new_commit = self._git[new_commit]
-        table = []
-        _ignore = set()
+    def log_table(self, new_commit, limit=float('inf'), ignore=[]):
+        walker = self._git.walk(self._git[new_commit].oid,
+                pygit2.GIT_SORT_TOPOLOGICAL | pygit2.GIT_SORT_TIME)
+
         for b in ignore:
             c = self._git.lookup_branch(b)
             if c is None:
@@ -237,13 +237,12 @@ class TicketBranch(Component):
             else:
                 c = c.get_object()
             if c is not None:
-                _ignore.add(c.hex)
+                walker.hide(c.oid)
 
-        for commit in self._git.walk(new_commit.oid,
-                pygit2.GIT_SORT_TOPOLOGICAL | pygit2.GIT_SORT_TIME):
-            if limit is not None and len(table) >= limit:
-                break
-            if commit.hex in _ignore:
+        table = []
+
+        for commit in walker:
+            if len(table) >= limit:
                 break
             short_sha1 = commit.hex[:7]
             title = commit.message.splitlines()
@@ -275,14 +274,14 @@ class TicketBranch(Component):
             commit = ticket['commit'] = u''
 
         if (req.args.get('preview') is None and
-                req.args.get('comment') is not None and
+                req.args.get('id') is not None and
                 commit and
                 commit != old_commit):
             ignore = {MASTER_BRANCH}
             if old_commit is not None:
                 ignore.add(old_commit)
             try:
-                table = self.log_table(commit, ignore=ignore)
+                table = self.log_table(commit, limit=MAX_NEW_COMMITS+1,ignore=ignore)
             except (pygit2.GitError, KeyError):
                 return []
             if len(table) > MAX_NEW_COMMITS:
@@ -291,7 +290,7 @@ class TicketBranch(Component):
             else:
                 header = u'New commits:'
             if table:
-                comment = req.args['comment'].splitlines()
+                comment = req.args.get('comment', '').splitlines()
                 if comment:
                     comment.append(u'----')
                 comment.append(header)
