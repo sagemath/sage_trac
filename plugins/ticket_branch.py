@@ -18,9 +18,14 @@ MASTER_BRANCH = u'develop'
 MAX_NEW_COMMITS = 10
 
 GIT_BASE_URL      = 'http://git.sagemath.org/sage.git/'
-GIT_LOG_RANGE_URL = GIT_BASE_URL + 'log/?h={branch}&qt=range&q={base}..{branch}'
+GIT_COMMIT_URL    = GIT_BASE_URL + 'commit/?id={commit}'
 GIT_DIFF_URL    = GIT_BASE_URL + 'diff/?id={commit}'
 GIT_DIFF_RANGE_URL    = GIT_BASE_URL + 'diff/?id2={base}&id={branch}'
+GIT_LOG_RANGE_URL = GIT_BASE_URL + 'log/?h={branch}&qt=range&q={base}..{branch}'
+
+GIT_SPECIAL_MERGES = ('GIT_FASTFORWARD', 'GIT_UPTODATE', 'GIT_FAILED_MERGE')
+for _merge in GIT_SPECIAL_MERGES:
+    globals()[_merge] = _merge
 
 TRAC_SIGNATURE = pygit2.Signature('trac', 'trac@sagemath.org')
 
@@ -83,17 +88,19 @@ class TicketBranch(Component):
             try:
                 tmp = self._merge(branch)
             except pygit2.GitError:
-                return error("does not merge cleanly", filters)
+                tmp = GIT_FAILED_MERGE
 
             self._set_cache(branch, tmp)
 
-        if tmp is True:
+        if tmp == GIT_FAILED_MERGE:
+            return error("does not merge cleanly", filters)
+        elif tmp == GIT_FASTFORWARD:
             filters.append(FILTER_TEXT.wrap(tag.a(class_="positive_review",
                 href=GIT_DIFF_RANGE_URL.format(
                     base=urllib.quote(MASTER_BRANCH, ''),
                     branch=urllib.quote(branch_name, ''))
                 )))
-        elif tmp is False:
+        elif tmp == GIT_UPTODATE:
             filters.append(FILTER.attr("class", "positive_review"))
             filters.append(FILTER.attr("title", "already merged"))
         else:
@@ -114,20 +121,18 @@ class TicketBranch(Component):
         if base != self.master_sha1:
             self._drop_table()
             return None
-        if tmp == "True" or tmp == "False":
-            return eval(tmp)
-        else:
-            return self._git.get(tmp)
+        if tmp in GIT_SPECIAL_MERGES:
+            return tmp
+        return self._git.get(tmp)
 
     def _set_cache(self, branch, tmp):
         self._create_table()
         with self.env.db_transaction as db:
             cursor = db.cursor()
             cursor.execute('DELETE FROM "merge_store" WHERE target=%s', (branch.hex,))
-            if tmp is True or tmp is False:
-                cursor.execute('INSERT INTO "merge_store" VALUES (%s, %s, %s)', (self.master_sha1, branch.hex, str(tmp)))
-            else:
-                cursor.execute('INSERT INTO "merge_store" VALUES (%s, %s, %s)', (self.master_sha1, branch.hex, tmp.hex))
+            if tmp not in GIT_SPECIAL_MERGES:
+                tmp = tmp.hex
+            cursor.execute('INSERT INTO "merge_store" VALUES (%s, %s, %s)', (self.master_sha1, branch.hex, tmp))
 
     @property
     def master_sha1(self):
@@ -158,31 +163,45 @@ class TicketBranch(Component):
             repo = pygit2.Repository(tmpdir)
             merge = repo.merge(branch.oid)
             if merge.is_fastforward:
-                ret = True
+                ret = GIT_FASTFORWARD
             elif merge.is_uptodate:
-                ret = False
+                ret = GIT_UPTODATE
             else:
+                # record the files that changed
+                changed = set()
+                for file, s in repo.status().items():
+                    if s != pygit2.GIT_STATUS_INDEX_DELETED:
+                        changed.add(file)
+                    file = os.path.dirname(file)
+                    while file:
+                        changed.add(file)
+                        file = os.path.dirname(file)
+
                 # write the merged tree
+                # this will error if merge isn't clean
                 merge_tree = repo.index.write_tree()
 
                 # write objects to main git repo
-                def recursive_write(tree):
+                def recursive_write(tree, path=''):
                     for obj in tree:
-                        obj = repo.get(obj.oid)
-                        if isinstance(obj, pygit2.Tree):
-                            recursive_write(obj)
-                        else:
-                            self._git.write(pygit2.GIT_OBJ_BLOB, obj.read_raw())
+                        new_path = os.path.join(path, obj.name)
+                        if new_path in changed:
+                            obj = repo.get(obj.oid)
+                            if isinstance(obj, pygit2.Tree):
+                                recursive_write(obj, new_path)
+                            else:
+                                self._git.write(pygit2.GIT_OBJ_BLOB, obj.read_raw())
                     return self._git.write(pygit2.GIT_OBJ_TREE, tree.read_raw())
                 merge_tree = recursive_write(repo.get(merge_tree))
 
                 ret = self._git.create_commit(
-                        None,
-                        TRAC_SIGNATURE,
-                        TRAC_SIGNATURE,
-                        'Temporary merge of %s into %s'%(branch.hex, repo.head.get_object().hex),
-                        merge_tree,
-                        [repo.head.get_object().oid, branch.oid])
+                        None, # don't update any refs
+                        TRAC_SIGNATURE, # author
+                        TRAC_SIGNATURE, # committer
+                        'Temporary merge of %s into %s'%(branch.hex, repo.head.get_object().hex), # merge message
+                        merge_tree, # commit's tree
+                        [repo.head.get_object().oid, branch.oid], # parents
+                        )
         finally:
             import shutil
             shutil.rmtree(tmpdir)
@@ -210,10 +229,21 @@ class TicketBranch(Component):
     def log_table(self, new_commit, limit=None, ignore=[]):
         new_commit = self._git[new_commit]
         table = []
-        for commit in self._git.walk(new_commit.oid, pygit2.GIT_SORT_TOPOLOGICAL | pygit2.GIT_SORT_TIME):
+        _ignore = set()
+        for b in ignore:
+            c = self._git.lookup_branch(b)
+            if c is None:
+                c = self._git.get(b)
+            else:
+                c = c.get_object()
+            if c is not None:
+                _ignore.add(c.hex)
+
+        for commit in self._git.walk(new_commit.oid,
+                pygit2.GIT_SORT_TOPOLOGICAL | pygit2.GIT_SORT_TIME):
             if limit is not None and len(table) >= limit:
                 break
-            if commit.hex in ignore:
+            if commit.hex in _ignore:
                 break
             short_sha1 = commit.hex[:7]
             title = commit.message.splitlines()
@@ -221,7 +251,11 @@ class TicketBranch(Component):
                 title = title[0]
             else:
                 title = u''
-            table.append(u'||[[%s|%s]]||{{{%s}}}||'%(GIT_COMMIT_URL.format(commit=short_sha1), short_sha1, title))
+            table.append(
+                    u'||[%s %s]||{{{%s}}}||'%(
+                        GIT_COMMIT_URL.format(commit=commit.hex),
+                        short_sha1,
+                        title))
         return table
 
     # doesn't actually do anything, according to the api
