@@ -12,30 +12,17 @@ import os.path
 import re
 import urllib
 
-branch_re = re.compile(r"^(?!.*/\.)(?!.*\.\.)(?!/)(?!.*//)(?!.*@\{)(?!.*\\)[^\040\177 ~^:?*[]+(?<!\.lock)(?<!/)(?<!\.)$") # http://stackoverflow.com/questions/12093748/how-do-i-check-for-valid-git-branch-names
-
-change_re = re.compile('^\+=======$', re.MULTILINE)
-removed_re = re.compile('removed in (?:local|remote)\n  (?:base|our|their)   \d{6} ([a-f\d]{40}) .+\n  (?:base|our|their)  \d{6} ([a-f\d]{40})')
+import pygit2
 
 MASTER_BRANCH = u'develop'
 MAX_NEW_COMMITS = 10
 
-GIT_RANGE_LOG_URL = 'http://git.sagemath.org/sage.git/log/?h={branch}&qt=range&q={base}..{branch}'
-GIT_RANGE_LOG_URL = GIT_RANGE_LOG_URL.format(base=urllib.quote(MASTER_BRANCH, ''), branch='{branch}')
+GIT_BASE_URL      = 'http://git.sagemath.org/sage.git/'
+GIT_LOG_RANGE_URL = GIT_BASE_URL + 'log/?h={branch}&qt=range&q={base}..{branch}'
+GIT_DIFF_URL    = GIT_BASE_URL + 'diff/?id={commit}'
+GIT_DIFF_RANGE_URL    = GIT_BASE_URL + 'diff/?id2={base}&id={branch}'
 
-def _is_clean_merge(merge_tree):
-    for match in change_re.finditer(merge_tree):
-        return False
-
-    for match in removed_re.finditer(merge_tree):
-        sha1, sha2 = match.groups()
-        if sha1 != sha2:
-            return False
-
-    return True
-
-class GitError(Exception):
-    pass
+TRAC_SIGNATURE = pygit2.Signature('trac', 'trac@sagemath.org')
 
 FILTER = Transformer('//td[@headers="h_branch"]')
 FILTER_TEXT = Transformer('//td[@headers="h_branch"]/text()')
@@ -54,8 +41,6 @@ class TicketBranch(Component):
         if not self.git_dir:
             raise TracError("[trac] repository_dir is not set in the config file")
         self._master = None
-        self._cache = {}
-        self._tree_cache = {}
 
     def filter_stream(self, req, method, filename, stream, data):
         """
@@ -65,8 +50,6 @@ class TicketBranch(Component):
         branch = data.get('ticket', {'branch':None})['branch']
         if filename != 'ticket.html' or not branch:
             return stream
-
-        branch = branch_name = branch.strip()
 
         def error_filters(error):
             return FILTER.attr("class", "needs_work"), FILTER.attr("title", error)
@@ -81,130 +64,137 @@ class TicketBranch(Component):
             filters = tuple(filters)+error_filters(error)
             return apply_filters(filters)
 
+        branch = branch_name = branch.strip()
 
-        if not self._is_valid_branch_name(branch):
-            return error("not a valid branch name")
-        if not self._is_existing_branch(branch):
+        branch = self._git.lookup_branch(branch)
+        if branch is None:
             return error("branch does not exist")
-
-        master = self._dereference_head(MASTER_BRANCH)
-        if master != self._master:
-            self._master = master
-            self._cache = {}
-            self._tree_cache = {}
-
-        branch = self._dereference_head(branch)
-
-        if branch in self._cache:
-            return apply_filters(self._cache[branch])
-
-        def apply_filters(filters):
-            self._cache[branch] = filters
-            s = stream
-            for filter in filters:
-                s |= filter
-            return s
-
-        try:
-            base = self._merge_base(master, branch)
-        except GitError:
-            return error("failed to determine common ancestor")
-
-        if base == branch:
-            return error("no commits on branch yet")
+        else:
+            branch = branch.get_object()
 
         filters = [FILTER.append(tag.a('(Commits)',
-                href=GIT_RANGE_LOG_URL.format(branch=urllib.quote(branch_name, ''))))]
+                href=GIT_LOG_RANGE_URL.format(
+                    base=urllib.quote(MASTER_BRANCH, ''),
+                    branch=urllib.quote(branch_name, ''))
+                ))]
 
-        merge_tree = self.__git('merge-tree', base, master, branch)
-        if _is_clean_merge(merge_tree):
-            self._tree_cache[branch] = merge_tree
+        tmp = self._get_cache(branch)
+        if tmp is None:
+            try:
+                tmp = self._merge(branch)
+            except pygit2.GitError:
+                return error("does not merge cleanly", filters)
+
+            self._set_cache(branch, tmp)
+
+        if tmp is True:
+            filters.append(FILTER_TEXT.wrap(tag.a(class_="positive_review",
+                href=GIT_DIFF_RANGE_URL.format(
+                    base=urllib.quote(MASTER_BRANCH, ''),
+                    branch=urllib.quote(branch_name, ''))
+                )))
+        elif tmp is False:
+            filters.append(FILTER.attr("class", "positive_review"))
+            filters.append(FILTER.attr("title", "already merged"))
         else:
-            return error("does not merge cleanly", filters)
-
-        filters.append(FILTER_TEXT.wrap(tag.a(class_="positive_review",
-                href=req.href.changeset(base=base, old=master, new=branch))))
-
-        self._tree_cache[branch] = merge_tree
+            filters.append(FILTER_TEXT.wrap(tag.a(class_="positive_review",
+                href=GIT_DIFF_URL.format(commit=tmp.hex))))
 
         return apply_filters(filters)
 
-    def _is_valid_branch_name(self, branch):
-        """
-        Returns whether ``branch`` is a valid git branch name.
-        """
-        return bool(branch_re.match(branch))
+    def _get_cache(self, branch):
+        self._create_table()
+        with self.env.db_query as db:
+            cursor = db.cursor()
+            cursor.execute('SELECT base, tmp FROM "merge_store" WHERE target=%s', (branch.hex,))
+            try:
+                base, tmp = cursor.next()
+            except StopIteration:
+                return None
+        if base != self.master_sha1:
+            self._drop_table()
+            return None
+        if tmp == "True" or tmp == "False":
+            return eval(tmp)
+        else:
+            return self._git.get(tmp)
 
-    def _is_existing_branch(self, branch):
-        """
-        Returns whether ``branch`` is a valid git branch that exists in the git
-        repository.
-        """
+    def _set_cache(self, branch, tmp):
+        self._create_table()
+        with self.env.db_transaction as db:
+            cursor = db.cursor()
+            cursor.execute('DELETE FROM "merge_store" WHERE target=%s', (branch.hex,))
+            if tmp is True or tmp is False:
+                cursor.execute('INSERT INTO "merge_store" VALUES (%s, %s, %s)', (self.master_sha1, branch.hex, str(tmp)))
+            else:
+                cursor.execute('INSERT INTO "merge_store" VALUES (%s, %s, %s)', (self.master_sha1, branch.hex, tmp.hex))
+
+    @property
+    def master_sha1(self):
+        return self._git.lookup_branch(MASTER_BRANCH).get_object().hex
+
+    def _create_table(self):
+        with self.env.db_transaction as db:
+            cursor = db.cursor()
+            cursor.execute('SELECT * FROM information_schema.tables WHERE "table_name"=%s', ('merge_store',))
+            if not cursor.rowcount:
+                cursor.execute('CREATE TABLE "merge_store" ( base text, target text, tmp text, PRIMARY KEY ( target ), UNIQUE ( target, tmp ) )')
+
+    def _drop_table(self):
+        with self.env.db_transaction as db:
+            cursor = db.cursor()
+            cursor.execute('SELECT * FROM information_schema.tables WHERE "table_name"=%s', ('merge_store',))
+            if cursor.rowcount:
+                cursor.execute('DROP TABLE "merge_store"')
+
+    def _merge(self, branch):
+        import tempfile
+        tmpdir = tempfile.mkdtemp()
+
         try:
-            return \
-                self._is_valid_branch_name(branch) and \
-                bool(self.__git("branch","--list",branch).strip()) # the branch exists if there is something in the output
-        except subprocess.CalledProcessError as e:
-            self.log.debug("%s failed with exit code %s. The output was:\n%s"%(e.cmd,e.returncode,e.output))
-            return False
+            # libgit2/pygit2 are ridiculously slow when cloning local paths
+            subprocess.call(['git', 'clone', self.git_dir, tmpdir, '--branch=%s'%MASTER_BRANCH])
 
-    def _is_existing_head(self, head):
-        """
-        Returns whether ``head`` is a valid git head that exists in the git
-        repository.
-        """
+            repo = pygit2.Repository(tmpdir)
+            merge = repo.merge(branch.oid)
+            if merge.is_fastforward:
+                ret = True
+            elif merge.is_uptodate:
+                ret = False
+            else:
+                # write the merged tree
+                merge_tree = repo.index.write_tree()
+
+                # write objects to main git repo
+                def recursive_write(tree):
+                    for obj in tree:
+                        obj = repo.get(obj.oid)
+                        if isinstance(obj, pygit2.Tree):
+                            recursive_write(obj)
+                        else:
+                            self._git.write(pygit2.GIT_OBJ_BLOB, obj.read_raw())
+                    return self._git.write(pygit2.GIT_OBJ_TREE, tree.read_raw())
+                merge_tree = recursive_write(repo.get(merge_tree))
+
+                ret = self._git.create_commit(
+                        None,
+                        TRAC_SIGNATURE,
+                        TRAC_SIGNATURE,
+                        'Temporary merge of %s into %s'%(branch.hex, repo.head.get_object().hex),
+                        merge_tree,
+                        [repo.head.get_object().oid, branch.oid])
+        finally:
+            import shutil
+            shutil.rmtree(tmpdir)
+        return ret
+
+    @property
+    def _git(self):
         try:
-            self._dereference_head(head)
-        except GitError:
-            return False
-
-        return True
-
-    def _common_ancestor(self, a, b):
-        """
-        Return the common ancestor of the commits a and b.
-        """
-        try:
-            rev_a = self.__git('rev-list', '--first-parent', a).splitlines()
-            rev_b = self.__git('rev-list', '--first-parent', b).splitlines()
-            while rev_a and rev_b:
-                sha1_a = rev_a.pop()
-                sha1_b = rev_b.pop()
-                if sha1_a == sha1_b:
-                    ret = sha1_a
-                else:
-                    return ret
-            return ret
-        except subprocess.CalledProcessError as e:
-            self.log.error("%s failed with exit code %s. The output was:\n%s"%(e.cmd,e.returncode,e.output))
-            raise GitError("no common ancestor")
-        except NameError:
-            raise GitError("no common ancestor")
-
-    def _dereference_head(self, head):
-        """
-        Returns the SHA1 which (the existing) ``head`` points to.
-        """
-        try:
-            return self.__git("show-ref","--heads","-s",head).split('\n')[0]
-        except subprocess.CalledProcessError as e:
-            self.log.error("%s failed with exit code %s. The output was:\n%s"%(e.cmd,e.returncode,e.output))
-            raise GitError("could not dereference `%s`"%head)
-        except IndexError:
-            raise GitError("could not dereference `%s`"%head)
-
-    def __git(self, *args):
-        """
-        Helper to run a git command.
-        """
-        return subprocess.check_output(["git","--git-dir=%s"%self.git_dir]+list(args))
-
-    def _merge_base(self, tree1, tree2):
-        try:
-            return self.__git('merge-base', tree1, tree2).strip()
-        except subprocess.CalledProcessError as e:
-            self.log.error("%s failed with exit code %s. The output was:\n%s"%(e.cmd,e.returncode,e.output))
-            raise GitError("could not determine merge base of `%s` and `%s`"%(tree1, tree2))
+            return self.__git
+        except AttributeError:
+            self.__git = pygit2.Repository(self.git_dir)
+            return self.__git
 
     def _valid_commit(self, val):
         if not isinstance(val, basestring):
@@ -217,22 +207,21 @@ class TicketBranch(Component):
         except ValueError:
             return
 
-    def get_commit_link(self, sha1):
-        return 'http://git.sagemath.org/sage.git/commit/?id={0}'.format(sha1)
-
     def log_table(self, new_commit, limit=None, ignore=[]):
-        git_cmd = ['log', '--oneline']
-        if limit is not None:
-            git_cmd.append('--max-count={0}'.format(limit))
-        git_cmd.append(new_commit)
-        for branch in ignore:
-            git_cmd.append('^{0}'.format(branch))
-        log = self.__git(*git_cmd)
+        new_commit = self._git[new_commit]
         table = []
-        for line in log.splitlines():
-            short_sha1 = line[:7]
-            title = line[8:].decode('utf8')
-            table.append(u'||[[%s|%s]]||{{{%s}}}||'%(self.get_commit_link(short_sha1), short_sha1, title))
+        for commit in self._git.walk(new_commit.oid, pygit2.GIT_SORT_TOPOLOGICAL | pygit2.GIT_SORT_TIME):
+            if limit is not None and len(table) >= limit:
+                break
+            if commit.hex in ignore:
+                break
+            short_sha1 = commit.hex[:7]
+            title = commit.message.splitlines()
+            if title:
+                title = title[0]
+            else:
+                title = u''
+            table.append(u'||[[%s|%s]]||{{{%s}}}||'%(GIT_COMMIT_URL.format(commit=short_sha1), short_sha1, title))
         return table
 
     # doesn't actually do anything, according to the api
@@ -245,8 +234,8 @@ class TicketBranch(Component):
         if branch:
             ticket['branch'] = branch = branch.strip()
             try:
-                commit = ticket['commit'] = unicode(self._dereference_head(branch))
-            except GitError:
+                commit = ticket['commit'] = unicode(self._git.lookup_branch(branch).get_object().hex)
+            except pygit2.GitError:
                 commit = ticket['commit'] = u''
         else:
             commit = ticket['commit'] = u''
@@ -260,7 +249,7 @@ class TicketBranch(Component):
                 ignore.add(old_commit)
             try:
                 table = self.log_table(commit, ignore=ignore)
-            except GitError:
+            except (pygit2.GitError, KeyError):
                 return []
             if len(table) > MAX_NEW_COMMITS:
                 header = u'Last {0} new commits:'.format(MAX_NEW_COMMITS)
