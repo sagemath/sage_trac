@@ -255,21 +255,22 @@ class TicketBranch(Component):
                         GIT_COMMIT_URL.format(commit=commit.hex),
                         short_sha1,
                         title))
-        return table
+        return reversed(table)
 
     # doesn't actually do anything, according to the api
     def prepare_ticket(self, req, ticket, fields, actions): pass
 
-    # hack changes into validate_ticket, since api is currently stilly
+    # hack changes into validate_ticket, since api is currently silly
     def validate_ticket(self, req, ticket):
         branch = ticket['branch']
         old_commit = self._valid_commit(ticket['commit'])
         if branch:
             ticket['branch'] = branch = branch.strip()
-            try:
-                commit = ticket['commit'] = unicode(self._git.lookup_branch(branch).get_object().hex)
-            except pygit2.GitError:
+            commit = self._git.lookup_branch(branch)
+            if commit is None:
                 commit = ticket['commit'] = u''
+            else:
+                commit = ticket['commit'] = unicode(commit.get_object().hex)
         else:
             commit = ticket['commit'] = u''
 
@@ -290,7 +291,7 @@ class TicketBranch(Component):
             else:
                 header = u'New commits:'
             if table:
-                comment = req.args.get('comment', '').splitlines()
+                comment = req.args.get('comment', u'').splitlines()
                 if comment:
                     comment.append(u'----')
                 comment.append(header)
