@@ -255,7 +255,8 @@ class TicketBranch(Component):
                         GIT_COMMIT_URL.format(commit=commit.hex),
                         short_sha1,
                         title))
-        return reversed(table)
+        table.reverse()
+        return table
 
     # doesn't actually do anything, according to the api
     def prepare_ticket(self, req, ticket, fields, actions): pass
