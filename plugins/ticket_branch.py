@@ -9,8 +9,6 @@ from trac.ticket.api import ITicketManipulator
 
 import subprocess
 import os.path
-import re
-import urllib
 
 import pygit2
 
@@ -69,7 +67,7 @@ class TicketBranch(Component):
             filters = tuple(filters)+error_filters(error)
             return apply_filters(filters)
 
-        branch = branch_name = branch.strip()
+        branch = branch.strip()
 
         branch = self._git.lookup_branch(branch)
         if branch is None:
@@ -79,8 +77,8 @@ class TicketBranch(Component):
 
         filters = [FILTER.append(tag.a('(Commits)',
                 href=GIT_LOG_RANGE_URL.format(
-                    base=urllib.quote(MASTER_BRANCH, ''),
-                    branch=urllib.quote(branch_name, ''))
+                    base=self.master_sha1,
+                    branch=branch.hex)
                 ))]
 
         tmp = self._get_cache(branch)
@@ -97,8 +95,8 @@ class TicketBranch(Component):
         elif tmp == GIT_FASTFORWARD:
             filters.append(FILTER_TEXT.wrap(tag.a(class_="positive_review",
                 href=GIT_DIFF_RANGE_URL.format(
-                    base=urllib.quote(MASTER_BRANCH, ''),
-                    branch=urllib.quote(branch_name, ''))
+                    base=self.master_sha1,
+                    branch=branch.hex)
                 )))
         elif tmp == GIT_UPTODATE:
             filters.append(FILTER.attr("class", "positive_review"))
