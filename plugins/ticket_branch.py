@@ -20,7 +20,7 @@ MAX_NEW_COMMITS = 10
 GIT_BASE_URL      = 'http://git.sagemath.org/sage.git/'
 GIT_COMMIT_URL    = GIT_BASE_URL + 'commit/?id={commit}'
 GIT_DIFF_URL    = GIT_BASE_URL + 'diff/?id={commit}'
-GIT_DIFF_RANGE_URL    = GIT_BASE_URL + 'diff/?id2={base}&id={branch}'
+GIT_DIFF_RANGE_URL    = GIT_BASE_URL + 'diff/?id={branch}&id2={base}'
 GIT_LOG_RANGE_URL = GIT_BASE_URL + 'log/?h={branch}&qt=range&q={base}..{branch}'
 
 GIT_SPECIAL_MERGES = ('GIT_FASTFORWARD', 'GIT_UPTODATE', 'GIT_FAILED_MERGE')
